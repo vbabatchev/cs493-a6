@@ -23,20 +23,23 @@ from six.moves.urllib.request import urlopen
 
 from schemas import (
     AvatarCreateResponse,
+    CourseCreateRequest,
     LoginRequest,
     UserRole,
     BAD_REQUEST_ERROR,
     UNAUTHORIZED_ERROR,
     FORBIDDEN_ERROR,
     NOT_FOUND_ERROR,
+    course_entity_to_response,
     user_entity_to_list_response,
     user_entity_to_response,
 )
 
 # CONSTANTS
 ALGORITHMS = ["RS256"]
-USERS = "users"
 AVATAR_BUCKET = "a6-babatchv-bucket"
+COURSES = "courses"
+USERS = "users"
 
 
 class StatusCode(Enum):
@@ -422,6 +425,82 @@ def delete_avatar(id):
         return "", 204
     except Exception:
         return NOT_FOUND_ERROR.model_dump(), StatusCode.NOT_FOUND.value
+
+
+# COURSE ENDPOINTS
+@app.route(f"/{COURSES}", methods=["POST"])
+def create_course():
+    """Create a new course if the Authorization header contains a
+    valid JWT belonging to an admin.
+
+    :return: The created course or an error, and the HTTP status code
+    """
+    # Authenticate user
+    payload = verify_jwt(request)
+
+    # Check if the user is admin
+    if not is_admin(payload):
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    if request.method == "POST":
+        content = request.get_json()
+
+        if not content:
+            return BAD_REQUEST_ERROR.model_dump(), StatusCode.BAD_REQUEST.value
+
+        # Check for valid instructor_id
+        instructor_key = client.key(USERS, content["instructor_id"])
+        instructor = client.get(instructor_key)
+
+        if (
+            not instructor
+            or instructor.get("role") != UserRole.INSTRUCTOR.value
+        ):
+            return BAD_REQUEST_ERROR.model_dump(), StatusCode.BAD_REQUEST.value
+
+        # Create new course
+        course_data = CourseCreateRequest(**content)
+
+        new_course = datastore.Entity(key=client.key(COURSES))
+        new_course.update(course_data.model_dump())
+        client.put(new_course)
+
+        # Add course to the instructor's courses
+        instructor_courses = instructor.get("courses", [])
+        course_url = url_for(
+            "get_course", id=new_course.key.id, _external=True
+        )
+        instructor_courses.append(course_url)
+        instructor["courses"] = instructor_courses
+        client.put(instructor)
+
+        response = course_entity_to_response(
+            new_course,
+            new_course.key.id,
+            course_url,
+        ).model_dump()
+
+        return response, 201
+    else:
+        return jsonify(error="Method not recognized")
+
+
+@app.route(f"/{COURSES}/<int:id>", methods=["GET"])
+def get_course(id):
+
+    # Get course from datastore
+    course_key = client.key(COURSES, id)
+    course = client.get(course_key)
+
+    if not course:
+        return NOT_FOUND_ERROR.model_dump(), StatusCode.NOT_FOUND.value
+
+    self_url = url_for("get_course", id=id, _external=True)
+    response = course_entity_to_response(
+        course, course.key.id, self_url
+    ).model_dump()
+
+    return response
 
 
 # HELPER FUNCTIONS

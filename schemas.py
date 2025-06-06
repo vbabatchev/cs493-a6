@@ -1,7 +1,7 @@
 from enum import StrEnum, auto
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UserRole(StrEnum):
@@ -56,6 +56,30 @@ class AvatarCreateResponse(BaseModel):
     avatar_url: str
 
 
+# Courses Schemas
+class CourseBase(BaseModel):
+    """Base class for Course schema."""
+
+    subject: str = Field(max_length=4)
+    number: int
+    title: str = Field(max_length=50)
+    term: str = Field(max_length=10)
+    instructor_id: int
+
+
+class CourseCreateRequest(CourseBase):
+    """Schema for creating a course."""
+
+    pass
+
+
+class CourseResponse(CourseBase):
+    """Schema for course response."""
+
+    id: int
+    self: str
+
+
 # Error Schema
 class ErrorResponse(BaseModel):
     """Model for error responses."""
@@ -103,4 +127,18 @@ def user_entity_to_response(user, user_id):
         sub=user["sub"],
         courses=courses,
         avatar_url=user.get("avatar_url"),
+    )
+
+
+# Helpter functions for course entities
+def course_entity_to_response(course, course_id, self_url):
+    """Convert a Datastore course entity to a CourseResponse schema."""
+    return CourseResponse(
+        id=course_id,
+        subject=course["subject"],
+        number=course["number"],
+        title=course["title"],
+        term=course["term"],
+        instructor_id=course["instructor_id"],
+        self=self_url,
     )
