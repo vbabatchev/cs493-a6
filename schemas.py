@@ -95,38 +95,21 @@ FORBIDDEN_ERROR = ErrorResponse(
 )
 NOT_FOUND_ERROR = ErrorResponse(Error="Not found")
 
-# CONSTANTS
-ROLES_WITH_COURSES = [UserRole.INSTRUCTOR.value, UserRole.STUDENT.value]
-
 
 # Helper functions for user entities
-def user_entity_to_list_response(user, user_id):
-    """Convert a Datastore user entity to a UserListResponse schema.
-
-    :param user: The user entity from Datastore.
-    :param user_id: The unique identifier for the user.
-    :return: UserListResponse schema with minimal fields.
-    """
-    return UserListResponse(id=user_id, role=user["role"], sub=user["sub"])
-
-
-def user_entity_to_response(user, user_id):
+def user_entity_to_response(user, user_id, avatar_url=None, courses=None):
     """Converts a Datastore user entity to a UserResponse schema.
 
     :param user: The user entity from Datastore.
     :param user_id: The unique identifier for the user.
     :return: UserResponse schema with all fields.
     """
-    courses = None
-    if user["role"] in ROLES_WITH_COURSES:
-        courses = user.get("courses", [])
-
     return UserResponse(
         id=user_id,
         role=user["role"],
         sub=user["sub"],
         courses=courses,
-        avatar_url=user.get("avatar_url"),
+        avatar_url=avatar_url,
     )
 
 

@@ -31,13 +31,14 @@ from schemas import (
     FORBIDDEN_ERROR,
     NOT_FOUND_ERROR,
     course_entity_to_response,
-    user_entity_to_list_response,
     user_entity_to_response,
 )
 
 # CONSTANTS
 ALGORITHMS = ["RS256"]
 AVATAR_BUCKET = "a6-babatchv-bucket"
+AVATAR_FILENAME_PREFIX = "avatar_"
+AVATAR_FILENAME_EXTENSION = ".png"
 COURSES = "courses"
 USERS = "users"
 
@@ -214,7 +215,7 @@ def get_users():
     users = query.fetch()
 
     response = [
-        user_entity_to_list_response(user, user.key.id).model_dump()
+        user_entity_to_response(user, user.key.id).model_dump()
         for user in users
     ]
 
@@ -232,10 +233,21 @@ def get_user(id):
     payload = verify_jwt(request)
     user_key = client.key(USERS, id)
     user = client.get(user_key)
+
     if user and (user["sub"] == payload.get("sub") or is_admin(payload)):
-        response = user_entity_to_response(user, user.key.id).model_dump(
-            exclude_none=True
+        # Generate avatar URL if the user has an avatar
+        avatar_url = (
+            url_for("get_avatar", id=id, _external=True)
+            if user_has_avatar(id)
+            else None
         )
+
+        # Get courses for the user based on their role
+        user_role = user.get("role")
+        courses = get_user_courses(id, user_role)
+        response = user_entity_to_response(
+            user, user.key.id, avatar_url, courses
+        ).model_dump(exclude_none=True)
     else:
         response = FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
 
@@ -305,10 +317,7 @@ def create_avatar(id):
     file_obj = request.files["file"]
 
     # Create a file name for the avatar
-    file_extension = (
-        file_obj.filename.split(".")[-1] if "." in file_obj.filename else "png"
-    )
-    file_name = f"avatar_{id}.{file_extension}"
+    file_name = f"{AVATAR_FILENAME_PREFIX}{id}{AVATAR_FILENAME_EXTENSION}"
 
     try:
         # Create a storage client
@@ -322,15 +331,11 @@ def create_avatar(id):
         # Upload the file into Cloud Storage
         blob.upload_from_file(file_obj)
 
-        # Set the avatar_url in the user entity
+        # Generate the public URL for the uploaded file
         avatar_url = url_for("get_avatar", id=id, _external=True)
-        user["avatar_url"] = avatar_url
-        client.put(user)
 
         response = AvatarCreateResponse(avatar_url=avatar_url).model_dump()
-    except Exception as e:
-        print(f"Exception in create_avatar: {str(e)}")
-        print(f"Exception type: {type(e).__name__}")
+    except Exception:
         response = BAD_REQUEST_ERROR.model_dump(), StatusCode.BAD_REQUEST.value
 
     return response
@@ -355,13 +360,8 @@ def get_avatar(id):
     if not user or user["sub"] != payload.get("sub"):
         return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
 
-    # Check if the user has an avatar
-    avatar_url = user.get("avatar_url")
-    if not avatar_url:
-        return NOT_FOUND_ERROR.model_dump(), StatusCode.NOT_FOUND.value
-
     try:
-        file_name = f"avatar_{id}.png"
+        file_name = f"{AVATAR_FILENAME_PREFIX}{id}{AVATAR_FILENAME_EXTENSION}"
         storage_client = storage.Client()
         bucket = storage_client.get_bucket(AVATAR_BUCKET)
         # Create a blob with the given file name
@@ -405,22 +405,13 @@ def delete_avatar(id):
     if not user or user["sub"] != payload.get("sub"):
         return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
 
-    # Check if the user has an avatar
-    avatar_url = user.get("avatar_url")
-    if not avatar_url:
-        return NOT_FOUND_ERROR.model_dump(), StatusCode.NOT_FOUND.value
-
     try:
-        file_name = f"avatar_{id}.png"
+        file_name = f"{AVATAR_FILENAME_PREFIX}{id}{AVATAR_FILENAME_EXTENSION}"
         storage_client = storage.Client()
         bucket = storage_client.get_bucket(AVATAR_BUCKET)
         blob = bucket.blob(file_name)
         # Delete the file from Cloud Storage
         blob.delete()
-
-        # Remove the avatar_url from the user entity
-        user["avatar_url"] = None
-        client.put(user)
 
         return "", 204
     except Exception:
@@ -465,14 +456,10 @@ def create_course():
         new_course.update(course_data.model_dump())
         client.put(new_course)
 
-        # Add course to the instructor's courses
-        instructor_courses = instructor.get("courses", [])
+        # Generate the course URL
         course_url = url_for(
             "get_course", id=new_course.key.id, _external=True
         )
-        instructor_courses.append(course_url)
-        instructor["courses"] = instructor_courses
-        client.put(instructor)
 
         response = course_entity_to_response(
             new_course,
@@ -487,7 +474,6 @@ def create_course():
 
 @app.route(f"/{COURSES}/<int:id>", methods=["GET"])
 def get_course(id):
-
     # Get course from datastore
     course_key = client.key(COURSES, id)
     course = client.get(course_key)
@@ -517,6 +503,52 @@ def is_admin(payload):
     )
     user = list(query.fetch(limit=1))
     return user and user[0].get("role") == UserRole.ADMIN.value
+
+
+def user_has_avatar(user_id):
+    """Check if a user has an avatar by checking if the file exists in
+    storage.
+
+    :param user_id: The user's ID
+    :return: True if avatar exists, False otherwise
+    """
+    try:
+        storage_client = storage.Client()
+        bucket = storage_client.get_bucket(AVATAR_BUCKET)
+        blob = bucket.blob(
+            f"{AVATAR_FILENAME_PREFIX}{user_id}{AVATAR_FILENAME_EXTENSION}"
+        )
+        return blob.exists()
+    except Exception:
+        return False
+
+
+def get_user_courses(user_id, user_role):
+    """Get courses for a user based on their role.
+
+    :param user_id: The user's ID
+    :param user_role: The user's role
+    :return: List of course URLs
+    """
+    if user_role not in [UserRole.INSTRUCTOR.value, UserRole.STUDENT.value]:
+        return None
+
+    query = client.query(kind=COURSES)
+    # For instructors, filter by instructor_id
+    if user_role == UserRole.INSTRUCTOR.value:
+        query.add_filter(
+            filter=datastore.query.PropertyFilter(
+                "instructor_id", "=", user_id
+            )
+        )
+
+    # TODO: Implement student course filtering
+
+    courses = query.fetch()
+    return [
+        url_for("get_course", id=course.key.id, _external=True)
+        for course in courses
+    ]
 
 
 if __name__ == "__main__":
