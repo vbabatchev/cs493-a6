@@ -24,6 +24,7 @@ from six.moves.urllib.request import urlopen
 from schemas import (
     AvatarCreateResponse,
     CourseCreateRequest,
+    CourseListResponse,
     LoginRequest,
     UserRole,
     BAD_REQUEST_ERROR,
@@ -215,7 +216,9 @@ def get_users():
     users = query.fetch()
 
     response = [
-        user_entity_to_response(user, user.key.id).model_dump()
+        user_entity_to_response(user, user.key.id).model_dump(
+            exclude_none=True
+        )
         for user in users
     ]
 
@@ -465,9 +468,9 @@ def create_course():
             new_course,
             new_course.key.id,
             course_url,
-        ).model_dump()
+        )
 
-        return response, 201
+        return response.model_dump(), 201
     else:
         return jsonify(error="Method not recognized")
 
@@ -482,11 +485,59 @@ def get_course(id):
         return NOT_FOUND_ERROR.model_dump(), StatusCode.NOT_FOUND.value
 
     self_url = url_for("get_course", id=id, _external=True)
-    response = course_entity_to_response(
-        course, course.key.id, self_url
-    ).model_dump()
+    response = course_entity_to_response(course, course.key.id, self_url)
 
-    return response
+    return response.model_dump()
+
+
+@app.route(f"/{COURSES}", methods=["GET"])
+def get_courses():
+    """Get all courses with pagination, sorted by subject.
+
+    Query Parameters:
+    - offset: Starting position (default: 0)
+    - limit: Number of courses to return (default: 3)
+
+    :return: Paginated list of courses with optional next link
+    """
+    # Get query parameters
+    offset = request.args.get("offset", 0, type=int)
+    limit = request.args.get("limit", 3, type=int)
+
+    # Query courses sorted by subject
+    query = client.query(kind=COURSES)
+    query.order = ["subject"]
+
+    # Fetch an extra course for determining if there are more results
+    courses = list(query.fetch(limit=limit + 1, offset=offset))
+
+    # Check if there are more results
+    has_next = len(courses) > limit
+    if has_next:
+        courses = courses[:limit]  # Remove the extra course
+
+    # Convert courses to response format
+    course_responses = [
+        course_entity_to_response(
+            course,
+            course.key.id,
+            url_for("get_course", id=course.key.id, _external=True),
+        )
+        for course in courses
+    ]
+
+    # Generate next URL if there are more results
+    next_url = (
+        url_for(
+            "get_courses", offset=offset + limit, limit=limit, _external=True
+        )
+        if has_next
+        else None
+    )
+
+    response = CourseListResponse(courses=course_responses, next=next_url)
+
+    return response.model_dump(exclude_none=True)
 
 
 # HELPER FUNCTIONS

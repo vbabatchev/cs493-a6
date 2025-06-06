@@ -80,6 +80,13 @@ class CourseResponse(CourseBase):
     self: str
 
 
+class CourseListResponse(BaseModel):
+    """Schema for paginated course list responses."""
+
+    courses: list[CourseResponse]
+    next: Optional[str] = None
+
+
 # Error Schema
 class ErrorResponse(BaseModel):
     """Model for error responses."""
