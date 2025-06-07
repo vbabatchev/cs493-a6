@@ -2,7 +2,14 @@
 Author: Velislav Babatchev
 Date: 06/05/2025
 
-Description:
+Description: This is a Flask application that provides endpoints for
+user authentication, course management, and avatar handling. It uses
+Google Cloud Datastore for data storage and Google Cloud Storage for
+avatar image storage. The application supports JWT-based authentication
+and includes endpoints for creating, retrieving, updating, and deleting
+users, courses, and avatars. It also allows for user enrollment in
+courses and provides functionality for instructors to manage their
+courses and enrolled students.
 """
 
 import io
