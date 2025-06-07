@@ -598,6 +598,45 @@ def update_course(id):
     return response.model_dump()
 
 
+@app.route(f"/{COURSES}/<int:id>", methods=["DELETE"])
+def delete_course(id):
+    """Delete a course if the Authorization header contains a valid JWT
+    belonging to an admin.
+
+    :param id: The ID of the course to delete.
+    :return: Empty response with 204 status code on success, or error
+        response
+    """
+    # Authenticate user
+    payload = verify_jwt(request)
+
+    # Check if the user is admin
+    if not is_admin(payload):
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    # Get course from datastore
+    course_key = client.key(COURSES, id)
+    course = client.get(course_key)
+
+    if not course:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    # Check if the course has any enrollments that need to be deleted
+    query = client.query(kind=ENROLLMENTS)
+    query.add_filter(
+        filter=datastore.query.PropertyFilter("course_id", "=", id)
+    )
+    enrollments = query.fetch()
+    enrollment_keys = [enrollment.key for enrollment in enrollments]
+    if enrollment_keys:
+        client.delete_multi(enrollment_keys)
+
+    # Delete the course entity
+    client.delete(course_key)
+
+    return "", 204
+
+
 @app.route(f"/{COURSES}/<int:id>/students", methods=["PATCH"])
 def update_enrollment(id):
     """Update the enrollment of a course by adding or removing students
