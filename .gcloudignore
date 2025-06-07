@@ -22,7 +22,8 @@ __pycache__/
 *.postman_collection.json
 *.postman_environment.json
 assignment6-api-doc.pdf
-collection_run.txt
+collection_run*
+student1.png
 
 # Virtual environment
 .venv/
