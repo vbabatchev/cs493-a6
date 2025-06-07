@@ -619,17 +619,14 @@ def update_enrollment(id):
 
     # Get course instructor
     instructor_id = course.get("instructor_id")
-    if not instructor_id:
-        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
-
     instructor_key = client.key(USERS, instructor_id)
     instructor = client.get(instructor_key)
-    if not instructor:
-        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
 
     # Check if the user is an admin or the course instructor
     user_sub = payload.get("sub")
-    if not is_admin(payload) and instructor.get("sub") != user_sub:
+    if not is_admin(payload) and (
+        not instructor or instructor.get("sub") != user_sub
+    ):
         return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
 
     content = request.get_json()
@@ -696,6 +693,48 @@ def update_enrollment(id):
                 client.delete(enrollment.key)
 
     return ""
+
+
+@app.route(f"/{COURSES}/<int:id>/students", methods=["GET"])
+def get_enrolled_students(id):
+    """Get the list of students enrolled in a course if the
+    Authorization header contains a valid JWT belonging to an admin or
+    the course instructor.
+
+    :param id: The ID of the course.
+    :return: A list of enrolled students or an error, and the HTTP status code
+    """
+    # Authenticate user
+    payload = verify_jwt(request)
+
+    # Get course from datastore
+    course_key = client.key(COURSES, id)
+    course = client.get(course_key)
+
+    if not course:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    # Get course instructor
+    instructor_id = course.get("instructor_id")
+    instructor_key = client.key(USERS, instructor_id)
+    instructor = client.get(instructor_key)
+
+    # Check if the user is an admin or the course instructor
+    user_sub = payload.get("sub")
+    if not is_admin(payload) and (
+        not instructor or instructor.get("sub") != user_sub
+    ):
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    query = client.query(kind=ENROLLMENTS)
+    query.add_filter(
+        filter=datastore.query.PropertyFilter("course_id", "=", id)
+    )
+    enrollments = list(query.fetch())
+
+    student_ids = [enrollment["student_id"] for enrollment in enrollments]
+
+    return student_ids
 
 
 # HELPER FUNCTIONS
