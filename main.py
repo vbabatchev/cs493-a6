@@ -22,16 +22,18 @@ from pydantic import ValidationError
 from six.moves.urllib.request import urlopen
 
 from schemas import (
+    BAD_REQUEST_ERROR,
+    ENROLLMENT_ERROR,
+    FORBIDDEN_ERROR,
+    NOT_FOUND_ERROR,
+    UNAUTHORIZED_ERROR,
     AvatarCreateResponse,
     CourseCreateRequest,
     CourseListResponse,
     CourseUpdateRequest,
+    EnrollmentUpdateRequest,
     LoginRequest,
     UserRole,
-    BAD_REQUEST_ERROR,
-    UNAUTHORIZED_ERROR,
-    FORBIDDEN_ERROR,
-    NOT_FOUND_ERROR,
     course_entity_to_response,
     user_entity_to_response,
 )
@@ -42,6 +44,7 @@ AVATAR_BUCKET = "a6-babatchv-bucket"
 AVATAR_FILENAME_PREFIX = "avatar_"
 AVATAR_FILENAME_EXTENSION = ".png"
 COURSES = "courses"
+ENROLLMENTS = "enrollments"
 USERS = "users"
 
 
@@ -50,6 +53,7 @@ class StatusCode(Enum):
     UNAUTHORIZED = 401
     FORBIDDEN = 403
     NOT_FOUND = 404
+    CONFLICT = 409
 
 
 app = Flask(__name__)
@@ -594,6 +598,106 @@ def update_course(id):
     return response.model_dump()
 
 
+@app.route(f"/{COURSES}/<int:id>/students", methods=["PATCH"])
+def update_enrollment(id):
+    """Update the enrollment of a course by adding or removing students
+    if the Authorization header contains a valid JWT belonging to an
+    admin or the course instructor.
+
+    :param id: The ID of the course to update.
+    :return: The updated course or an error, and the HTTP status code
+    """
+    # Authenticate user
+    payload = verify_jwt(request)
+
+    # Get course from datastore
+    course_key = client.key(COURSES, id)
+    course = client.get(course_key)
+
+    if not course:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    # Get course instructor
+    instructor_id = course.get("instructor_id")
+    if not instructor_id:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    instructor_key = client.key(USERS, instructor_id)
+    instructor = client.get(instructor_key)
+    if not instructor:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    # Check if the user is an admin or the course instructor
+    user_sub = payload.get("sub")
+    if not is_admin(payload) and instructor.get("sub") != user_sub:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    content = request.get_json()
+
+    if not content:
+        return ENROLLMENT_ERROR.model_dump(), StatusCode.CONFLICT.value
+
+    try:
+        enrollment_data = EnrollmentUpdateRequest(**content)
+    except ValidationError:
+        return ENROLLMENT_ERROR.model_dump(), StatusCode.CONFLICT.value
+
+    # Validate enrollment data
+    for student_id in enrollment_data.add:
+        if student_id in enrollment_data.remove:
+            return ENROLLMENT_ERROR.model_dump(), StatusCode.CONFLICT.value
+
+        student_key = client.key(USERS, student_id)
+        student = client.get(student_key)
+        if not student or student.get("role") != UserRole.STUDENT.value:
+            return ENROLLMENT_ERROR.model_dump(), StatusCode.CONFLICT.value
+
+    for student_id in enrollment_data.remove:
+        student_key = client.key(USERS, student_id)
+        student = client.get(student_key)
+        if not student or student.get("role") != UserRole.STUDENT.value:
+            return ENROLLMENT_ERROR.model_dump(), StatusCode.CONFLICT.value
+
+    # Add students to the course
+    for student_id in enrollment_data.add:
+        query = client.query(kind=ENROLLMENTS)
+        query.add_filter(
+            filter=datastore.query.PropertyFilter(
+                "student_id", "=", student_id
+            ),
+        )
+        query.add_filter(
+            filter=datastore.query.PropertyFilter("course_id", "=", id),
+        )
+        results = list(query.fetch(limit=1))
+
+        # Create a new enrollment if the student is not already enrolled
+        if len(results) == 0:
+            new_enrollment = datastore.Entity(key=client.key(ENROLLMENTS))
+            new_enrollment.update({"student_id": student_id, "course_id": id})
+            client.put(new_enrollment)
+
+    # Remove students from the course
+    for student_id in enrollment_data.remove:
+        query = client.query(kind=ENROLLMENTS)
+        query.add_filter(
+            filter=datastore.query.PropertyFilter(
+                "student_id", "=", student_id
+            ),
+        )
+        query.add_filter(
+            filter=datastore.query.PropertyFilter("course_id", "=", id),
+        )
+        results = list(query.fetch())
+
+        # If the student is enrolled, delete the enrollment entity
+        if results:
+            for enrollment in results:
+                client.delete(enrollment.key)
+
+    return ""
+
+
 # HELPER FUNCTIONS
 def is_admin(payload):
     """Check if the JWT payload indicates an admin user.
@@ -638,21 +742,28 @@ def get_user_courses(user_id, user_role):
     if user_role not in [UserRole.INSTRUCTOR.value, UserRole.STUDENT.value]:
         return None
 
-    query = client.query(kind=COURSES)
-    # For instructors, filter by instructor_id
+    # For instructors, filter courses by instructor_id
     if user_role == UserRole.INSTRUCTOR.value:
+        query = client.query(kind=COURSES)
         query.add_filter(
             filter=datastore.query.PropertyFilter(
                 "instructor_id", "=", user_id
             )
         )
+        courses = query.fetch()
+        course_ids = [course.key.id for course in courses]
+    else:
+        # For students, get courses by student_id from enrollments
+        query = client.query(kind=ENROLLMENTS)
+        query.add_filter(
+            filter=datastore.query.PropertyFilter("student_id", "=", user_id)
+        )
+        enrollments = query.fetch()
+        course_ids = [enrollment["course_id"] for enrollment in enrollments]
 
-    # TODO: Implement student course filtering
-
-    courses = query.fetch()
     return [
-        url_for("get_course", id=course.key.id, _external=True)
-        for course in courses
+        url_for("get_course", id=course_id, _external=True)
+        for course_id in course_ids
     ]
 
 

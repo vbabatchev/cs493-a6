@@ -56,7 +56,7 @@ class AvatarCreateResponse(BaseModel):
     avatar_url: str
 
 
-# Courses Schemas
+# Course Schemas
 class CourseBase(BaseModel):
     """Base class for Course schema."""
 
@@ -97,6 +97,14 @@ class CourseUpdateRequest(BaseModel):
     instructor_id: Optional[int] = None
 
 
+# Enrollment Schemas
+class EnrollmentUpdateRequest(BaseModel):
+    """Schema for updating an enrollment."""
+
+    add: list[int] = Field(default_factory=list)
+    remove: list[int] = Field(default_factory=list)
+
+
 # Error Schema
 class ErrorResponse(BaseModel):
     """Model for error responses."""
@@ -111,6 +119,7 @@ FORBIDDEN_ERROR = ErrorResponse(
     Error="You don't have permission on this resource"
 )
 NOT_FOUND_ERROR = ErrorResponse(Error="Not found")
+ENROLLMENT_ERROR = ErrorResponse(Error="Enrollment data is invalid")
 
 
 # Helper functions for user entities
