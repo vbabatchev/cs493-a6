@@ -25,6 +25,7 @@ from schemas import (
     AvatarCreateResponse,
     CourseCreateRequest,
     CourseListResponse,
+    CourseUpdateRequest,
     LoginRequest,
     UserRole,
     BAD_REQUEST_ERROR,
@@ -538,6 +539,59 @@ def get_courses():
     response = CourseListResponse(courses=course_responses, next=next_url)
 
     return response.model_dump(exclude_none=True)
+
+
+@app.route(f"/{COURSES}/<int:id>", methods=["PATCH"])
+def update_course(id):
+    """Update an existing course if the Authorization header contains a
+    valid JWT belonging to an admin.
+
+    :param id: The ID of the course to update.
+    :return: The updated course or an error, and the HTTP status code
+    """
+    # Authenticate user
+    payload = verify_jwt(request)
+
+    # Check if the user is admin
+    if not is_admin(payload):
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    # Get course from datastore
+    course_key = client.key(COURSES, id)
+    course = client.get(course_key)
+
+    if not course:
+        return FORBIDDEN_ERROR.model_dump(), StatusCode.FORBIDDEN.value
+
+    content = request.get_json()
+
+    if content is None:
+        return BAD_REQUEST_ERROR.model_dump(), StatusCode.BAD_REQUEST.value
+
+    # Validate and update course data
+    course_data = CourseUpdateRequest(**content)
+
+    # Check to see if instructor_id is valid
+    if "instructor_id" in course_data.model_dump(exclude_unset=True):
+        instructor_key = client.key(USERS, course_data.instructor_id)
+        instructor = client.get(instructor_key)
+
+        if (
+            not instructor
+            or instructor.get("role") != UserRole.INSTRUCTOR.value
+        ):
+            return BAD_REQUEST_ERROR.model_dump(), StatusCode.BAD_REQUEST.value
+
+    # Update course entity with new data
+    for key, value in course_data.model_dump(exclude_unset=True).items():
+        course[key] = value
+
+    client.put(course)
+
+    self_url = url_for("get_course", id=id, _external=True)
+    response = course_entity_to_response(course, id, self_url)
+
+    return response.model_dump()
 
 
 # HELPER FUNCTIONS

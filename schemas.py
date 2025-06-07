@@ -87,6 +87,16 @@ class CourseListResponse(BaseModel):
     next: Optional[str] = None
 
 
+class CourseUpdateRequest(BaseModel):
+    """Schema for updating a course."""
+
+    subject: Optional[str] = Field(default=None, max_length=4)
+    number: Optional[int] = None
+    title: Optional[str] = Field(default=None, max_length=50)
+    term: Optional[str] = Field(default=None, max_length=10)
+    instructor_id: Optional[int] = None
+
+
 # Error Schema
 class ErrorResponse(BaseModel):
     """Model for error responses."""
